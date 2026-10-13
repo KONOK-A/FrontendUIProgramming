@@ -4,6 +4,11 @@
 
 #include "NativeGameplayTags.h"
 
+/**
+ * 前端路由使用的原生标签：栈标签定位容器，页面标签查找 Widget 类，图片标签查找纹理。
+ * 例如 Frontend.Widget.ConfirmScreen 表示页面身份，Frontend.WidgetStack.Modal 表示容器身份。
+ * 变量在同名 .cpp 中注册实际路径；标签本身不会创建资源。
+ */
 namespace FrontendGameplayTags
 {	
 	//Frontend widget stack

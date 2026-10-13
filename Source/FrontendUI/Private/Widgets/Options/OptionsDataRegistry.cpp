@@ -17,11 +17,17 @@
 
 #include "FrontendDebugHelper.h"
 
+// 将已知的设置函数名变成 Helper 的路径：GET_FUNCTION_NAME_STRING_CHECKED 检查 C++ 函数名是否存在。
+// 运行时还要通过 UE 反射按路径调用；自定义设置 getter/setter 因此声明为 UFUNCTION。
+// 每次宏调用创建一个 Helper，所以 getter 与 setter 各自保存自己的函数路径。
 #define MAKE_OPTIONS_DATA_CONTROL(SetterOrGetterFuncName) \
 	MakeShared<FOptionsDataInteractionHelper>(GET_FUNCTION_NAME_STRING_CHECKED(UFrontendGameUserSettings,SetterOrGetterFuncName))
 
+// 描述从字符串表按 key 读取 FText，便于在资产中维护和本地化。
 #define GET_DESCRIPTION(InKey) LOCTABLE("/Game/UI/StringTables/ST_OptionsScreenDescription.ST_OptionsScreenDescription", InKey)
 
+// OptionsScreen 的 GetOrCreateDataRegistry 只在首次创建 Registry 后调用此入口。
+// 四个 Init 函数组装各页数据；只有 Control 需要本地玩家，用来取得该玩家的 Enhanced Input 设置。
 void UOptionsDataRegistry::InitOptionsDataRegistry(ULocalPlayer* InOwningLocalPlayer)
 {
 	InitGameplayCollectionTab();
@@ -30,8 +36,10 @@ void UOptionsDataRegistry::InitOptionsDataRegistry(ULocalPlayer* InOwningLocalPl
 	InitControlCollectionTab(InOwningLocalPlayer);
 }
 
+// 将选中页签的数据树按父在前、子在后的顺序展开；分类节点也作为列表标题保留。
 TArray<UListDataObject_Base*> UOptionsDataRegistry::GetListSourceItemsBySelectedTabID(const FName& InSelectedTabID) const
 {
+	// 页签按钮使用集合的 DataID；这里按 ID 找集合，不靠玩家看到的 Gameplay/Audio 等显示文本。
 	UListDataObject_Collection* const* FoundTabCollectionPtr = RegisteredOptionsTabCollections.FindByPredicate(
 		[InSelectedTabID](UListDataObject_Collection* AvailableTabCollection)->bool
 		{
@@ -63,6 +71,8 @@ TArray<UListDataObject_Base*> UOptionsDataRegistry::GetListSourceItemsBySelected
 	return AllChildListItems;
 }
 
+// 递归把每层直接子项追加到同一个结果数组，先加入分类，再展开分类内部，不重复加入当前父节点。
+// 例如 Audio 最终成为 Volume、OverallVolume、MusicVolume、SoundFXVolume、Sound、两个开关。
 void UOptionsDataRegistry::FindChildListDataRecursively(UListDataObject_Base* InParentData, TArray<UListDataObject_Base*>& OutFoundChildListData) const
 {
 	if (!InParentData || !InParentData->HasAnyChildListData())
@@ -86,6 +96,10 @@ void UOptionsDataRegistry::FindChildListDataRecursively(UListDataObject_Base* In
 	}
 }
 
+// Gameplay 页可作为阅读入口，沿 Difficulty 串起整个设置流程：
+// Registry 配置 String 数据 → 加入集合触发初始化 → Helper 调 GetCurrentGameDifficulty 取得当前值。
+// 切页后 String 行显示候选；用户点 Next → AdvanceToNextOption → Helper 调 SetCurrentGameDifficulty。
+// 数据调用 Base::NotifyListDataModified → 行刷新、页面更新 Reset → 按立即应用开关执行 ApplySettings。
 void UOptionsDataRegistry::InitGameplayCollectionTab()
 {
 	UListDataObject_Collection* GameplayTabCollection = NewObject<UListDataObject_Collection>();
@@ -98,17 +112,22 @@ void UOptionsDataRegistry::InitGameplayCollectionTab()
 		GET_FUNCTION_NAME_STRING_CHECKED(UFrontendGameUserSettings,GetCurrentGameDifficulty)
 	);*/
 	
+	// 典型注册顺序：创建数据 → 身份与文案 → 候选和默认值 → getter/setter → 加入集合。
+	// AddChildListData 会立即初始化；最后加入可确保初始化时能读到完整配置。
 	//Game Difficulty
 	{
 		UListDataObject_String* GameDifficulty = NewObject<UListDataObject_String>();
 		GameDifficulty->SetDataID(FName("GameDifficulty"));
 		GameDifficulty->SetDataDisplayName(FText::FromString(TEXT("Difficulty")));
 		GameDifficulty->SetDescriptionRichText(FText::FromString(TEXT("Adjusts the difficulty of the game experience.\n\n<Bold>Easy:</> Focuses on the story experience. Provides the most relaxing combat.\n\n<Bold>Normal:</> Offers slightly harder combat experience\n\n<Bold>Hard:</> Offers a much more challenging combat experience\n\n<Bold>Vert Hard:</> Provides the most challenging combat experience. Not recommended for first play through.")));
+		// 每对参数分别是设置实际值和显示文本；难度中两者恰好相同，Bool 中则可能是 true 与 Enabled。
 		GameDifficulty->AddDynamicOption(TEXT("Easy"),FText::FromString(TEXT("Easy")));
 		GameDifficulty->AddDynamicOption(TEXT("Normal"),FText::FromString(TEXT("Normal")));
 		GameDifficulty->AddDynamicOption(TEXT("Hard"),FText::FromString(TEXT("Hard")));
 		GameDifficulty->AddDynamicOption(TEXT("Very Hard"),FText::FromString(TEXT("Very Hard")));
+		// Normal 是本 UI 注册的 Reset 目标，也是在 getter 为空时使用的初始候补；这里不会调用 setter。
 		GameDifficulty->SetDefaultValueFromString(TEXT("Normal"));
+		// 把读/写函数交给数据对象后，String 行无需知道 UFrontendGameUserSettings 的具体字段。
 		GameDifficulty->SetDataDynamicGetter(MAKE_OPTIONS_DATA_CONTROL(GetCurrentGameDifficulty));
 		GameDifficulty->SetDataDynamicSetter(MAKE_OPTIONS_DATA_CONTROL(SetCurrentGameDifficulty));
 		GameDifficulty->SetShouldApplySettingsImmediately(true);
@@ -116,6 +135,7 @@ void UOptionsDataRegistry::InitGameplayCollectionTab()
 		GameplayTabCollection->AddChildListData(GameDifficulty);
 	}
 
+	// 这个演示项只配说明和图片，没有候选或 getter/setter；它没有普通可切换设置的完整读写链路。
 	//Test Item
 	{
 		UListDataObject_String* TestItem = NewObject<UListDataObject_String>();
@@ -130,6 +150,8 @@ void UOptionsDataRegistry::InitGameplayCollectionTab()
 	RegisteredOptionsTabCollections.Add(GameplayTabCollection);
 }
 
+// Audio 页：Volume 分类放滑条，Sound 分类放布尔选项；分类本身也是 Collection。
+// 这些音量项只连接设置字段，滑条变化本身不能证明实际声音控制已接入。
 void UOptionsDataRegistry::InitAudioCollectionTab()
 {
 	UListDataObject_Collection* AudioTabCollection = NewObject<UListDataObject_Collection>();
@@ -144,6 +166,9 @@ void UOptionsDataRegistry::InitAudioCollectionTab()
 
 		AudioTabCollection->AddChildListData(VolumeCategoryCollection);
 
+		// Scalar 示例：显示 0..1 格式化为 0..100%，写入范围却是 0..2。
+		// 所以输出默认值 1 对应界面 50%；拖到 75% 会写入 1.5。步长 0.01 属于显示区间。
+		// 数字格式和小数位由行控件读取后设置；下方两个音量项复用同一注册模式。
 		//Overall Volume
 		{
 			UListDataObject_Scalar* OverallVolume = NewObject<UListDataObject_Scalar>();
@@ -210,6 +235,7 @@ void UOptionsDataRegistry::InitAudioCollectionTab()
 
 		AudioTabCollection->AddChildListData(SoundCategoryCollection);
 
+		// Bool 仍使用 String 行；只改变 true/false 的显示文案，就能复用同一组前后切换与 Reset 逻辑。
 		//Allow Background Audio
 		{
 			UListDataObject_StringBool* AllowBackgroundAudio = NewObject<UListDataObject_StringBool>();
@@ -244,6 +270,7 @@ void UOptionsDataRegistry::InitAudioCollectionTab()
 	RegisteredOptionsTabCollections.Add(AudioTabCollection);
 }
 
+// Video 页：Display 处理显示模式及条件依赖，Graphics 处理画质联动，Advanced 放额外开关。
 void UOptionsDataRegistry::InitVideoCollectionTab()
 {
 	UListDataObject_Collection* VideoTabCollection = NewObject<UListDataObject_Collection>();
@@ -260,6 +287,8 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 
 		VideoTabCollection->AddChildListData(DisplayCategoryCollection);
 
+		// Descriptor 保存这段 lambda，等行控件查询可编辑状态时才执行；Editor/PIE 下结果为 false。
+		// 同一条规则分别添加给 WindowMode 和 ScreenResolution，不必把判断逻辑复制到两个行控件。
 		FOptionsDataEditConditionDescriptor PackagedBuildOnlyCondition;
 		PackagedBuildOnlyCondition.SetEditConditionFunc(
 			[]()->bool
@@ -279,6 +308,7 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 			WindowMode->SetDataID(FName("WindowMode"));
 			WindowMode->SetDataDisplayName(FText::FromString(TEXT("Window Mode")));
 			WindowMode->SetDescriptionRichText(GET_DESCRIPTION("WindowModeDescKey"));
+			// Enum 数据用反射把枚举项转为名称字符串；显示文本 Fullscreen Mode 可以与枚举名称不同。
 			WindowMode->AddEnumOption(EWindowMode::Fullscreen,FText::FromString(TEXT("Fullscreen Mode")));
 			WindowMode->AddEnumOption(EWindowMode::WindowedFullscreen,FText::FromString(TEXT("Borderless Window")));
 			WindowMode->AddEnumOption(EWindowMode::Windowed,FText::FromString(TEXT("Windowed")));
@@ -319,6 +349,10 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 			WindowModeEditCondition.SetDisabledRichReason(TEXT("\n\n<Disabled>Screen Resolution is not adjustable when the 'Window Mode' is set to Borderless Window.The value must match with the maximum allowed resolution.</>"));
 			WindowModeEditCondition.SetDisabledForcedStringValue(ScreenResolution->GetMaximumAllowedResolution());
 
+			// 条件决定能否编辑及禁用时的强制值；订阅则让 WindowMode 变化时通知该行重查条件。
+			// 条件失败时，强制值才在 IsDataCurrentlyEditable 查询过程中写入。
+			// 例如切到 Borderless：WindowMode 广播 → 分辨率行重查条件 → 强制最大候选并禁用该行。
+			// 后续切回可编辑模式只解除禁用，没有缓存并恢复此前用户选择的尺寸。
 			ScreenResolution->AddEditCondition(WindowModeEditCondition);
 
 			ScreenResolution->AddEditDependencyData(CreatedWindowMode);
@@ -335,6 +369,8 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 
 		VideoTabCollection->AddChildListData(GraphicsCategoryCollection);
 
+		// Brightness 也用 Scalar，但输出是 gamma 1.7..2.7；setter 直接写 GEngine->DisplayGamma。
+		// 这里没有开启立即 Apply；该字段的实际显示效果由 setter 的行为决定。
 		//Display Gamma
 		{
 			UListDataObject_Scalar* DisplayGamma = NewObject<UListDataObject_Scalar>();
@@ -355,6 +391,7 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 
 		UListDataObject_StringInteger* CreatedOverallQuality = nullptr;
 
+		// 这组总体/单项画质及 3D Resolution 未注册默认值，所以不会进入普通值项的页签 Reset 集合。
 		//Overall Quality
 		{
 			UListDataObject_StringInteger* OverallQuality = NewObject<UListDataObject_StringInteger>();
@@ -390,11 +427,15 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 			ResolutionScale->SetDataDynamicSetter(MAKE_OPTIONS_DATA_CONTROL(SetResolutionScaleNormalized));
 			ResolutionScale->SetShouldApplySettingsImmediately(true);
 
+			// 这里只做单向订阅：总体画质变动后，3D Resolution 从设置回读最新比例。
 			ResolutionScale->AddEditDependencyData(CreatedOverallQuality);
 
 			GraphicsCategoryCollection->AddChildListData(ResolutionScale);
 		}
 
+		// 整数画质示例：总体画质影响各子项，子项改变又可能让总体显示 Custom，因此双向订阅。
+		// 下方第一条订阅让本项跟随总体变化；第二条反向订阅让总体重新判断是否还能匹配预设档位。
+		// StringInteger 回读值相同就停止通知；后续七个画质项沿用这里的注册与联动模式。
 		//Global Illumination Quality
 		{
 			UListDataObject_StringInteger* GlobalIlluminationQuality = NewObject<UListDataObject_StringInteger>();
@@ -601,6 +642,7 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 			FullscreenOnlyCondition.SetDisabledRichReason(TEXT("\n\n<Disabled>This feature only works if the 'Window Mode' is set to 'Fullscreen'.</>"));
 			FullscreenOnlyCondition.SetDisabledForcedStringValue(TEXT("false"));
 
+			// 此处仅注册条件，没有订阅 WindowMode；条件会在界面再次查询可编辑状态时求值。
 			VerticalSync->AddEditCondition(FullscreenOnlyCondition);
 
 			AdvancedGraphicsCategoryCollection->AddChildListData(VerticalSync);
@@ -629,12 +671,15 @@ void UOptionsDataRegistry::InitVideoCollectionTab()
 	RegisteredOptionsTabCollections.Add(VideoTabCollection);
 }
 
+// Control 页从当前本地玩家的全部已保存 profiles 动态生成按键项，再按键鼠/手柄分类。
+// 遍历 profile → 映射行 → 各 slot 的映射，每项保留自己的读取配置与键位槽。
 void UOptionsDataRegistry::InitControlCollectionTab(ULocalPlayer* InOwningLocalPlayer)
 {
 	UListDataObject_Collection* ControlTabCollection = NewObject<UListDataObject_Collection>();
 	ControlTabCollection->SetDataID(FName("ControlTabCollection"));
 	ControlTabCollection->SetDataDisplayName(FText::FromString(TEXT("Control")));
 
+	// 从页面所属的 LocalPlayer 获取子系统及 UserSettings，键位数据因而属于这个玩家。
 	UEnhancedInputLocalPlayerSubsystem* EISubsystem = InOwningLocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>();
 
 	check(EISubsystem);
@@ -653,6 +698,7 @@ void UOptionsDataRegistry::InitControlCollectionTab(ULocalPlayer* InOwningLocalP
 
 		//Keyboard mouse inputs
 		{	
+			// 这里用 S 作为键盘类型样本；bMatchBasicKeyTypes 按基本类型过滤，并非只显示 S 键。
 			FPlayerMappableKeyQueryOptions KeyboardMouseOnly;
 			KeyboardMouseOnly.KeyToMatch = EKeys::S;
 			KeyboardMouseOnly.bMatchBasicKeyTypes = true;
@@ -667,6 +713,7 @@ void UOptionsDataRegistry::InitControlCollectionTab(ULocalPlayer* InOwningLocalP
 
 				check(MappableKeyProfile);
 
+				// 一行对应一个映射名称，行内 Mappings 可包含不同 slot；通过设备过滤的每条映射各生成一项。
 				for (const TPair<FName, FKeyMappingRow>& MappingRowPair : MappableKeyProfile->GetPlayerMappingRows())
 				{
 					for (const FPlayerKeyMapping& KeyMapping : MappingRowPair.Value.Mappings)

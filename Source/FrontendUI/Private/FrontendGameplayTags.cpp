@@ -3,6 +3,7 @@
 
 #include "FrontendGameplayTags.h"
 
+// 这里将 C++ 标签变量注册为实际路径；Story/Credit 等标签另在 DefaultGameplayTags.ini 中配置。
 namespace FrontendGameplayTags
 {	
 	//Frontend widget stack
